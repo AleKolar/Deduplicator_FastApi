@@ -33,3 +33,4 @@ if __name__ == "__main__":
         await queue_service.publish(sample_event)
 
     asyncio.run(main())
+
