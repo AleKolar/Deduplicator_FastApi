@@ -1,12 +1,10 @@
 import hashlib
-import os
-from dotenv import load_dotenv
-from my_venv.src.schemas import EventBatch, DedupeResult, Event
-
 from clickhouse_driver import Client
 from datetime import datetime
+from my_venv.src.schemas import Event, EventBatch, DedupeResponse
+import logging
 
-load_dotenv()
+from my_venv.src.utils.logger import logger
 
 ''' Запускаю clickhouse в Docker с гарантированно отключённой аутентификацией: 
 docker run -d `
@@ -18,90 +16,111 @@ docker run -d `
     clickhouse/clickhouse-server:latest
 '''
 
-# Чтоб гарантировано подключиться сделаем так
+
 class ClickHouseRepository:
     def __init__(self):
         self.client = Client(
-            host="localhost",  # Явно указываем хост
-            port=9000,  # Явно указываем порт
-            user="default",  # Явно указываем пользователя
-            password="",  # Явно пустой пароль
-            settings={'connect_timeout': 10}  # Таймаут подключения
+            host='localhost',
+            port=9000,
+            user='default',
+            password='',
+            settings={
+                'max_block_size': 100000,
+                'use_client_time_zone': True
+            }
         )
         self._init_db()
 
-# class ClickHouseRepository:
-#     def __init__(self):
-#         self.client = Client(
-#             host=os.getenv("CLICKHOUSE_HOST", "localhost"),
-#             port=int(os.getenv("CLICKHOUSE_PORT", "9000")),
-#             user=os.getenv("CLICKHOUSE_USER", "default"),
-#             password=os.getenv("CLICKHOUSE_PASSWORD", ""),
-#             settings={'connect_timeout': 3}
-#         )
-#         self._init_db()
-
     def _init_db(self):
-        self.client.execute("""  
-        CREATE TABLE IF NOT EXISTS event_hashes (  
-            hash String,  
-            timestamp DateTime DEFAULT now()  
-        ) ENGINE = ReplacingMergeTree()  
-        ORDER BY hash  
-        TTL timestamp + INTERVAL 7 DAY  
-        """)
+        try:
+            self.client.execute("""
+            CREATE TABLE IF NOT EXISTS event_hashes (
+                hash String,
+                timestamp DateTime DEFAULT now()
+            ) ENGINE = ReplacingMergeTree()
+            ORDER BY hash
+            TTL timestamp + INTERVAL 7 DAY
+            """)
+            logger.info("Table initialized successfully")
+        except Exception as e:
+            logger.error(f"Error initializing table: {e}")
+            raise
 
+    def _generate_hash(self, event: Event) -> str:
+        client_id = event.client_id or event.user_id or ""
+        data = f"{event.event_name}:{client_id}:{event.event_datetime.isoformat()}"
+        return hashlib.sha256(data.encode()).hexdigest()
 
-    def check_hash(self, event_hash: str) -> bool:
-        # Проверяем, существует ли хеш
-        result = self.client.execute(
-            "SELECT 1 FROM event_hashes WHERE hash = %(hash)s LIMIT 1",
-            {'hash': event_hash}
-        )
-        return len(result) > 0
-
-    def insert_hash(self, event_hash: str):
-        # Вставляем хеш в ClickHouse через запрос с параметрами
-        self.client.execute(
-            "INSERT INTO event_hashes (hash) VALUES (%(hash)s)",
-            {'hash': event_hash}
-        )
-
-    def deduplicate_events(self, event_batch: EventBatch) -> DedupeResult:
-        duplicate_hashes = []
+    def deduplicate_batch(self, event_batch: EventBatch) -> DedupeResponse:
         unique_count = 0
+        duplicate_count = 0
 
         for event in event_batch.events:
-            # Генерируем стабильный хеш в виде строки
-            hash_input = f"{event.client_id}_{event.event_datetime.isoformat()}".encode('utf-8')
-            event_hash = hashlib.sha256(hash_input).hexdigest()
+            try:
+                event_hash = self._generate_hash(event)
 
-            if self.check_hash(event_hash):
-                duplicate_hashes.append(event_hash)
-            else:
-                self.insert_hash(event_hash)
-                unique_count += 1
+                # Правильный синтаксис запроса с параметрами
+                result = self.client.execute(
+                    "SELECT 1 FROM event_hashes WHERE hash = %(hash)s LIMIT 1",
+                    {'hash': event_hash}
+                )
 
-        return DedupeResult(
-            status="Processed",
-            duplicates=len(duplicate_hashes),
-            unique_events=unique_count,
-            duplicate_hashes=duplicate_hashes
+                if not result:
+                    # Вставка с правильным синтаксисом параметров
+                    self.client.execute(
+                        "INSERT INTO event_hashes (hash) VALUES (%(hash)s)",
+                        {'hash': event_hash}
+                    )
+                    unique_count += 1
+                    logger.debug(f"New event: {event.event_name}")
+                else:
+                    duplicate_count += 1
+                    logger.debug(f"Duplicate: {event.event_name}")
+
+            except Exception as e:
+                logger.error(f"Error processing event: {e}")
+                duplicate_count += 1
+                continue
+
+        return DedupeResponse(
+            status='completed',
+            processed_events=len(event_batch.events),
+            duplicates=duplicate_count,
+            unique_events=unique_count
         )
 
 
-# Это для меня
 if __name__ == "__main__":
+    # Тестовые данные с корректными датами
+    test_events = {
+        "events": [
+            {
+                "event_name": "video_play",
+                "event_datetime": datetime.now().isoformat(),
+                "user_id": "user123",
+                "payload": {"video_id": "xyz123"}
+            },
+            {
+                "event_name": "video_play",
+                "event_datetime": datetime.now().isoformat(),
+                "client_id": "user123",
+                "payload": {"video_id": "xyz123"}
+            },
+            {
+                "event_name": "app_launch",
+                "event_datetime": datetime.now().isoformat(),
+                "client_id": "user456"
+            }
+        ]
+    }
+
+    # Инициализация и тестирование
     repo = ClickHouseRepository()
+    batch = EventBatch(**test_events)
+    result = repo.deduplicate_batch(batch)
 
-    # Батч событий
-    events = EventBatch(events=[
-        Event(event_name="Event1", client_id="123", event_datetime=datetime.now(), payload={"data": "value1"}),
-        Event(event_name="Event2", client_id="123", event_datetime=datetime.now(), payload={"data": "value2"}),
-        Event(event_name="Event1", client_id="123", event_datetime=datetime.now(), payload={"data": "value1"}),
-
-    ])
-
-    # Обрабатываем события
-    result = repo.deduplicate_events(events)
-    print(f"Dedupe Result: {result.model_dump_json(indent=4)}")
+    print("\nResults:")
+    print(f"Processed: {result.processed_events}")
+    print(f"Unique: {result.unique_events}")
+    print(f"Duplicates: {result.duplicates}")
+    print(f"Status: {result.status}")
