@@ -1,6 +1,6 @@
 import json
 import aio_pika
-from my_venv.src.utils.logger import logger
+from src.utils.logger import logger
 
 
 class QueueService:

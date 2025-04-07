@@ -1,9 +1,8 @@
 from fastapi import FastAPI, HTTPException
 from contextlib import asynccontextmanager
-from my_venv.src.schemas import Event, EventBatch, DedupeResult
+from my_venv.src.schemas import EventBatch, DedupeResponse
 from my_venv.src.repositories.clickhouse_repo import ClickHouseRepository
-from typing import List, Dict, Any
-from datetime import datetime
+from typing import List
 
 from my_venv.src.utils.logger import logger
 
@@ -24,7 +23,7 @@ app = FastAPI(lifespan=lifespan)
 
 
 @app.post("/deduplicate", response_model=DedupeResponse)
-async def deduplicate_events(events: List[EventRequest]):
+async def deduplicate_events(events: List[EventBatch]):
     """
     Эндпоинт для дедупликации событий.
     Принимает список событий, возвращает результат обработки.
