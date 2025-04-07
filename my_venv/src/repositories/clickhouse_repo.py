@@ -59,14 +59,14 @@ class ClickHouseRepository:
             try:
                 event_hash = self._generate_hash(event)
 
-                # Правильный синтаксис запроса с параметрами
+                # !!! Правильный синтаксис запроса с параметрами
                 result = self.client.execute(
                     "SELECT 1 FROM event_hashes WHERE hash = %(hash)s LIMIT 1",
                     {'hash': event_hash}
                 )
 
                 if not result:
-                    # Вставка с правильным синтаксисом параметров
+                    # !!! Правильный синтаксис параметров
                     self.client.execute(
                         "INSERT INTO event_hashes (hash) VALUES (%(hash)s)",
                         {'hash': event_hash}
