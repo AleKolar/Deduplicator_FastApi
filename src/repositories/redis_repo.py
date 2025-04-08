@@ -1,3 +1,4 @@
+""" Redis для кеширования хэшей событий """
 import os
 from datetime import timedelta
 import logging
@@ -101,3 +102,4 @@ class RedisRepository:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.close()
+

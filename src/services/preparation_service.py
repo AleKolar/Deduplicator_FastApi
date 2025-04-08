@@ -63,3 +63,4 @@ class DataPreparationService:
         except Exception as e:
             logger.error(f"Error getting recent hashes: {e}")
             return []
+
