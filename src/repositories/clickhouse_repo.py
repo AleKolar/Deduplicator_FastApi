@@ -4,6 +4,7 @@ from typing import Dict
 import logging
 
 from fastApiProject_Deduplicator.src.config import CLICKHOUSE_TABLE, CLICKHOUSE_HOST, CLICKHOUSE_BUFFER_SIZE
+from fastApiProject_Deduplicator.src.utils.logger import logger
 
 
 class ClickHouseRepo:
@@ -28,7 +29,7 @@ class ClickHouseRepo:
                 SETTINGS storage_policy = 'compressed'  
             """)
         except Error as e:
-            logging.error(f"ClickHouse error: {e}")
+            logger.error(f"ClickHouse error: {e}")
             raise
 
     def add_to_buffer(self, event: Dict):

@@ -1,3 +1,5 @@
+import os
+
 from redis import Redis
 from redis.exceptions import RedisError
 import logging
@@ -5,13 +7,10 @@ import logging
 from fastApiProject_Deduplicator.src.config import REDIS_HOST, REDIS_PORT, REDIS_TTL_DAYS
 
 
+
 class RedisRepo:
     def __init__(self):
-        self.redis = Redis(
-            host=REDIS_HOST,
-            port=REDIS_PORT,
-            decode_responses=False
-        )
+        self.redis = Redis.from_url(os.getenv("REDIS_URL"))
         self.ttl = REDIS_TTL_DAYS * 86400
 
     def increment_counter(self, key: str) -> int:

@@ -4,7 +4,6 @@
 import json
 import mmh3
 from redis.asyncio import Redis
-from fastapi import FastAPI
 
 
 class DeduplicationService:
@@ -20,7 +19,7 @@ class DeduplicationService:
             ensure_ascii=False
         ).encode('utf-8')
 
-    async def process_event(self, event: dict, ttl: int = 604800) -> bool:
+    async def process_event_dedup(self, event: dict, ttl: int = 604800) -> bool:
         """
         Атомарная проверка и маркировка события.
         Возвращает True для уникальных событий, False для дублей.
@@ -37,6 +36,5 @@ class DeduplicationService:
         )
 
         return result is not None
-
 
 
