@@ -1,59 +1,46 @@
-from fastapi import FastAPI, HTTPException
 from contextlib import asynccontextmanager
-from my_venv.src.schemas import EventBatch, DedupeResponse
-from my_venv.src.repositories.clickhouse_repo import ClickHouseRepository
-from typing import List
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import aio_pika
+import json
+from redis.asyncio import Redis
+from fastApiProject_Deduplicator.src.services.deduplicator import DeduplicationService
 
-from my_venv.src.utils.logger import logger
-
-
-# Lifespan management
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Инициализация при старте
-    logger.info("Starting application...")
-    app.state.clickhouse_repo = ClickHouseRepository()
+    # Инициализация подключений
+    app.redis = Redis.from_url("redis://localhost:6379")
+    app.deduplicator = DeduplicationService(app.redis)
+    # Подключение к RabbitMQ
+    app.rabbit_conn = await aio_pika.connect_robust("amqp://guest:guest@localhost/")
+    app.rabbit_channel = await app.rabbit_conn.channel()
+    await app.rabbit_channel.declare_queue("events", durable=True)
     yield
-    # Очистка при завершении
-    logger.info("Shutting down application...")
-    del app.state.clickhouse_repo
-
+    # Корректное закрытие подключений
+    await app.redis.close()
+    await app.rabbit_channel.close()
+    await app.rabbit_conn.close()
 
 app = FastAPI(lifespan=lifespan)
 
+class Event(BaseModel):
+    data: dict
 
-@app.post("/deduplicate", response_model=DedupeResponse)
-async def deduplicate_events(events: List[EventBatch]):
-    """
-    Эндпоинт для дедупликации событий.
-    Принимает список событий, возвращает результат обработки.
-    """
+@app.post("/v1/events")
+async def handle_event(event: Event):
     try:
-        # Преобразуем запрос в EventBatch
-        event_batch = EventBatch(events=events)
-
-        # Получаем репозиторий из состояния приложения
-        repo = app.state.clickhouse_repo
-
-        # Выполняем дедупликацию
-        result = repo.deduplicate_events(event_batch)
-
-        logger.info(f"Processed {len(events)} events, duplicates: {result.duplicates}")
-        return result
-
+        if await app.deduplicator.process_event(event.data):
+            await app.rabbit_channel.default_exchange.publish(
+                aio_pika.Message(
+                    body=json.dumps(event.data).encode(),
+                    delivery_mode=aio_pika.DeliveryMode.PERSISTENT
+                ),
+                routing_key="events"
+            )
+            return {"status": "accepted"}
+        return {"status": "duplicate"}
     except Exception as e:
-        logger.error(f"Error processing events: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/health")
-async def health_check():
-    """Проверка здоровья сервиса"""
-    return {
-        "status": "OK",
-        "database": "ClickHouse",
-        "ready": True
-    }
 
 
 if __name__ == "__main__":
