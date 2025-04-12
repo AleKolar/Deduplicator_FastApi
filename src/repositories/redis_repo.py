@@ -4,7 +4,7 @@ from redis import Redis
 from redis.exceptions import RedisError
 import logging
 
-from fastApiProject_Deduplicator.src.config import REDIS_HOST, REDIS_PORT, REDIS_TTL_DAYS
+from fastApiProject_Deduplicator.src.config import REDIS_TTL_DAYS
 
 
 
